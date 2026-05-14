@@ -28,7 +28,7 @@ class SignalEngine:
                 continue
             try:
                 features = build_features(symbol, candles, self.min_avg_traded_value)
-            except ValueError as exc:
+            except Exception as exc:
                 skipped.append({"symbol": symbol, "reason": str(exc)})
                 continue
             raw_features.append(features)
@@ -37,33 +37,36 @@ class SignalEngine:
 
         candidates = []
         for features in raw_features:
-            score_result = score_features(features)
-            if score_result.score < min_score and score_result.verdict == "reject":
-                continue
-            trade_plan = build_trade_plan(features)
-            strategy_profile = build_strategy_profile(features, score_result.score, score_result.verdict, trade_plan)
-            strategy_matches = match_strategy_families(
-                features,
-                score_result.score,
-                score_result.verdict,
-                trade_plan,
-            )
-            candidates.append(
-                {
-                    "symbol": features["symbol"],
-                    "sector": sector_for_symbol(features["symbol"]),
-                    "close": features["close"],
-                    "breakout_level": features["breakout_level"],
-                    "score": score_result.score,
-                    "verdict": score_result.verdict,
-                    "reasons": score_result.reasons,
-                    "risk_flags": score_result.risk_flags,
-                    "trade_plan": trade_plan,
-                    "strategy_profile": strategy_profile,
-                    "strategy_matches": strategy_matches,
-                    "features": features,
-                }
-            )
+            try:
+                score_result = score_features(features)
+                if score_result.score < min_score and score_result.verdict == "reject":
+                    continue
+                trade_plan = build_trade_plan(features)
+                strategy_profile = build_strategy_profile(features, score_result.score, score_result.verdict, trade_plan)
+                strategy_matches = match_strategy_families(
+                    features,
+                    score_result.score,
+                    score_result.verdict,
+                    trade_plan,
+                )
+                candidates.append(
+                    {
+                        "symbol": features["symbol"],
+                        "sector": sector_for_symbol(features["symbol"]),
+                        "close": features["close"],
+                        "breakout_level": features["breakout_level"],
+                        "score": score_result.score,
+                        "verdict": score_result.verdict,
+                        "reasons": score_result.reasons,
+                        "risk_flags": score_result.risk_flags,
+                        "trade_plan": trade_plan,
+                        "strategy_profile": strategy_profile,
+                        "strategy_matches": strategy_matches,
+                        "features": features,
+                    }
+                )
+            except Exception as exc:
+                skipped.append({"symbol": features.get("symbol", "UNKNOWN"), "reason": str(exc)})
 
         candidates.sort(key=lambda item: item["score"], reverse=True)
         candidates.extend(self._missing_data_candidate(item) for item in skipped)

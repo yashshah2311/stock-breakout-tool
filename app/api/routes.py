@@ -100,6 +100,32 @@ def _candidate_for_symbol(symbol: str, latest_scan: dict | None) -> dict | None:
     return None
 
 
+def _build_latest_from_stored_candles(settings) -> dict | None:
+    candle_repo = CandleRepository(settings.database_url)
+    stored_symbols = set(candle_repo.list_symbols())
+    if not stored_symbols:
+        return None
+
+    scan_repo = ScanRepository(settings.database_url)
+    engine = SignalEngine(
+        candle_repo=candle_repo,
+        min_avg_traded_value=settings.min_avg_traded_value,
+    )
+    scan_result = engine.scan(symbols=DEFAULT_NIFTY100_SYMBOLS, min_score=0)
+    scan_result["llm_report"] = None
+    scan_result["auto_built_from_stored_candles"] = True
+    try:
+        scan_repo.save_scan(
+            scan_date=date.fromisoformat(scan_result["scan_date"]),
+            candidates=scan_result["candidates"],
+            llm_report=None,
+            market_context=scan_result.get("market_context"),
+        )
+    except Exception as exc:
+        scan_result["persistence_warning"] = str(exc)
+    return scan_result
+
+
 @router.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
     settings = get_settings()
@@ -497,12 +523,15 @@ def scan(payload: ScanRequest) -> dict:
         )
         scan_result["llm_report"] = llm_report
 
-    scan_repo.save_scan(
-        scan_date=date.fromisoformat(scan_result["scan_date"]),
-        candidates=scan_result["candidates"],
-        llm_report=llm_report,
-        market_context=scan_result.get("market_context"),
-    )
+    try:
+        scan_repo.save_scan(
+            scan_date=date.fromisoformat(scan_result["scan_date"]),
+            candidates=scan_result["candidates"],
+            llm_report=llm_report,
+            market_context=scan_result.get("market_context"),
+        )
+    except Exception as exc:
+        scan_result["persistence_warning"] = str(exc)
     scan_result["markdown_report"] = build_markdown_report(scan_result, llm_report)
     return scan_result
 
@@ -513,7 +542,9 @@ def latest_results() -> dict:
     repo = ScanRepository(settings.database_url)
     latest = repo.latest_scan()
     if latest is None:
-        raise HTTPException(status_code=404, detail="No scan results found.")
+        latest = _build_latest_from_stored_candles(settings)
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No scan results found. Run a scan after candles are loaded.")
     return latest
 
 
@@ -580,5 +611,7 @@ def latest_report() -> str:
     repo = ScanRepository(settings.database_url)
     latest = repo.latest_scan()
     if latest is None:
-        raise HTTPException(status_code=404, detail="No scan results found.")
+        latest = _build_latest_from_stored_candles(settings)
+    if latest is None:
+        raise HTTPException(status_code=404, detail="No scan results found. Run a scan after candles are loaded.")
     return build_markdown_report(latest, latest.get("llm_report"))

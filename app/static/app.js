@@ -258,6 +258,7 @@ function renderStrategyRows() {
   }
   const selected = selectedStrategyId === "all" ? null : strategyById(selectedStrategyId);
   const rows = candidatesForStrategy(selectedStrategyId);
+  const hasScan = latestCandidates.length > 0;
   const statusText = selected?.status?.replaceAll("_", " ") || "active";
   strategyState.textContent =
     selectedStrategyId === "all"
@@ -279,7 +280,9 @@ function renderStrategyRows() {
   }
 
   if (!rows.length) {
-    strategyRows.innerHTML = '<tr><td colspan="10" class="empty">No Nifty 100 stocks currently match this strategy.</td></tr>';
+    strategyRows.innerHTML = hasScan
+      ? '<tr><td colspan="10" class="empty">No Nifty 100 stocks currently match this strategy.</td></tr>'
+      : '<tr><td colspan="10" class="empty">No scan data loaded yet. Click Run Scan to classify Nifty 100 stocks across strategy tabs.</td></tr>';
     return;
   }
 
@@ -392,6 +395,9 @@ async function loadLatest() {
     scanDate.textContent = `Scan date ${latest.scan_date} - ${latest.candidates?.length || 0} stocks shown`;
     renderCandidates(latestCandidates);
   } catch (error) {
+    latestCandidates = [];
+    setSectorOptions(latestCandidates);
+    renderSectorView(latestCandidates);
     scanDate.textContent = "No scan yet";
     candidateRows.innerHTML =
       '<tr><td colspan="17" class="empty">Run a scan after loading candle data.</td></tr>';
@@ -408,11 +414,26 @@ async function loadLatest() {
 
 async function refresh() {
   setStatus("Refreshing");
-  await loadStatus();
-  await loadStrategies();
-  await loadSymbols();
-  await loadLatest();
-  await loadPortfolio();
+  const failures = [];
+  for (const [label, loader] of [
+    ["status", loadStatus],
+    ["strategies", loadStrategies],
+    ["symbols", loadSymbols],
+    ["latest scan", loadLatest],
+    ["portfolio", loadPortfolio],
+  ]) {
+    try {
+      await loader();
+    } catch (error) {
+      failures.push(`${label}: ${error.message}`);
+    }
+  }
+  if (failures.length) {
+    setStatus("Partial data");
+    reportBox.textContent = `Some sections could not load:\n${failures.join("\n")}`;
+    return;
+  }
+  setStatus("Ready");
 }
 
 async function runScan(useOpenAI = false) {
