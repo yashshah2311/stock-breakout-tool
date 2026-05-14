@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: stock-breakout-tool
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DATA_PROVIDER
+        value: yahoo
+      - key: DATABASE_URL
+        value: sqlite:////tmp/stock_breakout.sqlite3
+      - key: PAPER_TRADES_CSV
+        value: /tmp/paper_trades.csv
+      - key: MIN_AVG_TRADED_VALUE
+        value: "50000000"
+      - key: MAX_OPENAI_CANDIDATES
+        value: "12"
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini

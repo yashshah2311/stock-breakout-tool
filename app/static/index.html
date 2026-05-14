@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MarketLens Breakout Workstation</title>
+    <link rel="stylesheet" href="/static/app.css?v=20260515h" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Nifty 100 analytics</p>
+        <h1>MarketLens Breakout Workstation</h1>
+      </div>
+      <div class="actions">
+        <button id="refreshBtn" title="Refresh dashboard">Refresh</button>
+        <button id="liveBtn" title="Load free delayed prices">Free Prices</button>
+        <button id="autoLiveBtn" title="Auto refresh prices during market hours">Auto Live</button>
+        <button id="scanBtn" title="Run scanner without OpenAI">Run Scan</button>
+        <button id="aiScanBtn" title="Run scan with AI summary">AI Scan</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel status-panel">
+        <div class="panel-title">
+          <h2>Status</h2>
+          <span id="statusBadge" class="badge">Loading</span>
+        </div>
+        <div class="metrics">
+          <div>
+            <span>Symbols</span>
+            <strong id="symbolCount">-</strong>
+          </div>
+          <div>
+            <span>Candles</span>
+            <strong id="candleCount">-</strong>
+          </div>
+          <div>
+            <span>Latest Candle</span>
+            <strong id="latestCandle">-</strong>
+          </div>
+          <div>
+            <span>OpenAI</span>
+            <strong id="openaiState">-</strong>
+          </div>
+          <div>
+            <span>Paper Trades</span>
+            <strong id="paperTradeCount">-</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel methodology-panel">
+        <div class="panel-title">
+          <h2>Analysis Basis</h2>
+          <span class="muted">Daily scanner plus delayed intraday charts</span>
+        </div>
+        <div class="method-grid">
+          <div>
+            <span>History Window</span>
+            <strong>5 years stored, 220+ candles required</strong>
+          </div>
+          <div>
+            <span>Resistance</span>
+            <strong>20d / 50d highs, 52w proximity</strong>
+          </div>
+          <div>
+            <span>Support</span>
+            <strong>20d / 50d lows, ATR stop logic</strong>
+          </div>
+          <div>
+            <span>Confirmation</span>
+            <strong>EMA trend, volume spike, RSI, ADX, candle pattern</strong>
+          </div>
+          <div>
+            <span>Possible Breakout</span>
+            <strong>Score 65+ and breakout or within 2% of resistance</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Sector View</h2>
+          <span id="sectorState" class="muted">Run or refresh scan</span>
+        </div>
+        <div id="sectorGrid" class="sector-grid">
+          <span class="empty">Loading sector analytics...</span>
+        </div>
+      </section>
+
+      <section class="panel strategy-panel">
+        <div class="panel-title">
+          <div>
+            <h2>Strategy Lab</h2>
+            <span id="strategyState" class="muted">Classifying Nifty 100 stocks by strategy family</span>
+          </div>
+          <span class="badge">30 strategy tabs</span>
+        </div>
+        <div id="strategyTabs" class="strategy-tabs">
+          <button class="strategy-tab active" data-strategy="all">All</button>
+        </div>
+        <div id="strategySummary" class="strategy-summary">
+          Select a strategy tab to see applicable stocks and the rule basis.
+        </div>
+        <div class="table-wrap">
+          <table class="strategy-table">
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Sector</th>
+                <th>Verdict</th>
+                <th>Score</th>
+                <th>Pattern</th>
+                <th>Volume</th>
+                <th>Entry</th>
+                <th>Stop</th>
+                <th>Target</th>
+                <th>Reason</th>
+              </tr>
+            </thead>
+            <tbody id="strategyRows">
+              <tr>
+                <td colspan="10" class="empty">Load or run a scan to populate strategy buckets.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>All Symbols</h2>
+          <div class="symbol-tools">
+            <input id="symbolSearch" type="search" placeholder="Search symbol" aria-label="Search symbols" />
+            <span id="symbolListState" class="muted">Loading symbols</span>
+          </div>
+        </div>
+        <div id="symbolGrid" class="symbol-grid">
+          <span class="empty">Loading symbols...</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Free Prices</h2>
+          <span id="liveState" class="muted">Yahoo/yfinance delayed data</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Exchange</th>
+                <th>Last Price</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody id="liveRows">
+              <tr>
+                <td colspan="4" class="empty">Click Free Prices to load delayed market data.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Latest Watchlist</h2>
+          <div class="watchlist-tools">
+            <select id="sectorFilter" aria-label="Filter by sector">
+              <option value="all">All sectors</option>
+            </select>
+            <select id="verdictFilter" aria-label="Filter by verdict">
+              <option value="all">All verdicts</option>
+              <option value="strong_watchlist">Strong watchlist</option>
+              <option value="possible_breakout">Possible breakout</option>
+              <option value="near_breakout">Near breakout</option>
+              <option value="avoid">Avoid</option>
+              <option value="reject">Reject</option>
+              <option value="data_missing">Data missing</option>
+            </select>
+            <span id="scanDate" class="muted">No scan loaded</span>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Symbol</th>
+                <th>Sector</th>
+                <th>Strategy</th>
+                <th>Tabs</th>
+                <th>Prediction</th>
+                <th>Verdict</th>
+                <th>Score</th>
+                <th>Close</th>
+                <th>Entry</th>
+                <th>Stop</th>
+                <th>Target</th>
+                <th>Breakout</th>
+                <th>Support</th>
+                <th>Volume</th>
+                <th>Risk</th>
+                <th>Qty</th>
+                <th>Trade</th>
+              </tr>
+            </thead>
+            <tbody id="candidateRows">
+              <tr>
+                <td colspan="17" class="empty">Loading candidates...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="panel-title">
+          <div>
+            <h2 id="chartTitle">Stock Chart</h2>
+            <span id="chartState" class="muted">Click any symbol to open candles</span>
+          </div>
+          <div class="chart-tools">
+            <select id="chartInterval" aria-label="Chart interval">
+              <option value="1m">1m</option>
+              <option value="5m" selected>5m</option>
+              <option value="15m">15m</option>
+              <option value="1d">1d</option>
+            </select>
+            <button id="refreshChartBtn" title="Refresh selected chart">Refresh Chart</button>
+          </div>
+        </div>
+        <div class="chart-layout">
+          <div class="chart-wrap">
+            <div id="chartStrategyBadges" class="chart-strategy-badges">
+              <span class="empty">Select a stock to visualize strategy overlays.</span>
+            </div>
+            <canvas id="stockChart" width="960" height="420"></canvas>
+            <div class="chart-legend">
+              <span><i class="legend-line breakout"></i>Breakout</span>
+              <span><i class="legend-line support"></i>Support</span>
+              <span><i class="legend-line entry"></i>Entry</span>
+              <span><i class="legend-line stop"></i>Stop</span>
+              <span><i class="legend-line ema20"></i>EMA 20</span>
+              <span><i class="legend-line ema50"></i>EMA 50</span>
+            </div>
+          </div>
+          <aside class="screener-card">
+            <h3>Screener</h3>
+            <dl id="chartScreener">
+              <div><dt>Symbol</dt><dd>-</dd></div>
+              <div><dt>Verdict</dt><dd>-</dd></div>
+              <div><dt>Score</dt><dd>-</dd></div>
+              <div><dt>Strategy</dt><dd>-</dd></div>
+              <div><dt>Breakout</dt><dd>-</dd></div>
+              <div><dt>Entry</dt><dd>-</dd></div>
+              <div><dt>Stop</dt><dd>-</dd></div>
+              <div><dt>Target</dt><dd>-</dd></div>
+              <div><dt>Volume</dt><dd>-</dd></div>
+            </dl>
+            <h3>Strategy Visuals</h3>
+            <div id="strategyVisualBox" class="strategy-visual-box">
+              <span class="empty">Strategy overlays will appear after opening a stock.</span>
+            </div>
+            <h3>Strategy 1: Momentum</h3>
+            <div id="momentumStrategyBox" class="momentum-strategy-box">
+              <span class="empty">Open a stock to calculate the momentum checklist.</span>
+            </div>
+            <h3>Strategy 2: Breakout</h3>
+            <div id="breakoutStrategyBox" class="breakout-strategy-box">
+              <span class="empty">Open a stock to calculate the breakout plan.</span>
+            </div>
+            <h3>Latest News</h3>
+            <div id="newsBox" class="news-box">
+              <span class="empty">News risk appears after opening a stock.</span>
+            </div>
+            <h3>Fundamentals</h3>
+            <dl id="fundamentalsBox">
+              <div><dt>P/E</dt><dd>-</dd></div>
+              <div><dt>EPS</dt><dd>-</dd></div>
+              <div><dt>Profit Margin</dt><dd>-</dd></div>
+              <div><dt>Revenue Growth</dt><dd>-</dd></div>
+              <div><dt>Quarter Profit</dt><dd>-</dd></div>
+            </dl>
+            <h3>Long-Term Research</h3>
+            <div id="longTermResearchBox" class="long-term-research-box">
+              <span class="empty">Open a stock to score long-term fundamentals.</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel fundamental-dashboard-panel">
+        <div class="panel-title">
+          <div>
+            <h2 id="fundamentalDashboardTitle">Stock Fundamental Dashboard</h2>
+            <span id="fundamentalDashboardState" class="muted">Click any stock to load derived long-term parameters</span>
+          </div>
+          <span class="badge">Long-term research</span>
+        </div>
+        <div id="fundamentalDashboard" class="fundamental-dashboard">
+          <span class="empty">Open a stock chart to populate the full fundamental dashboard.</span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Portfolio Dashboard</h2>
+          <span id="portfolioState" class="muted">Paper trade book</span>
+        </div>
+        <div class="metrics portfolio-metrics">
+          <div>
+            <span>Open</span>
+            <strong id="openPositions">0</strong>
+          </div>
+          <div>
+            <span>Closed</span>
+            <strong id="closedPositions">0</strong>
+          </div>
+          <div>
+            <span>Win Rate</span>
+            <strong id="winRate">0%</strong>
+          </div>
+          <div>
+            <span>Unrealized</span>
+            <strong id="unrealizedPnl">0</strong>
+          </div>
+          <div>
+            <span>Realized</span>
+            <strong id="realizedPnl">0</strong>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Trade Id</th>
+                <th>Symbol</th>
+                <th>Side</th>
+                <th>Qty</th>
+                <th>Entry</th>
+                <th>Current</th>
+                <th>Stop</th>
+                <th>Target 1</th>
+                <th>PnL</th>
+                <th>Return</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="portfolioRows">
+              <tr>
+                <td colspan="11" class="empty">No paper trades yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <h2>Report</h2>
+          <button id="copyReportBtn" title="Copy report">Copy</button>
+        </div>
+        <pre id="reportBox">Loading report...</pre>
+      </section>
+    </main>
+
+    <footer>
+      Educational scanner output only. This is not investment advice.
+    </footer>
+
+    <script src="/static/app.js?v=20260515h"></script>
+  </body>
+</html>
