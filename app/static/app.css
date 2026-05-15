@@ -75,6 +75,21 @@ button {
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 
+select {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-weight: 800;
+}
+
+.topbar select {
+  background: #18232d;
+  border-color: #31404e;
+  color: #ffffff;
+}
+
 .topbar button {
   background: #18232d;
   border-color: #31404e;

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MarketLens Breakout Workstation</title>
-    <link rel="stylesheet" href="/static/app.css?v=20260515j" />
+    <link rel="stylesheet" href="/static/app.css?v=20260515k" />
   </head>
   <body>
     <header class="topbar">
@@ -16,6 +16,11 @@
         <button id="refreshBtn" title="Refresh dashboard">Refresh</button>
         <button id="liveBtn" title="Load free delayed prices">Free Prices</button>
         <button id="autoLiveBtn" title="Auto refresh prices during market hours">Auto Live</button>
+        <select id="universeSelect" title="Choose scan universe">
+          <option value="nifty100">Nifty 100</option>
+          <option value="nifty50">Nifty 50</option>
+          <option value="bse_all">BSE All</option>
+        </select>
         <button id="repairBtn" title="Rebuild hosted candle history in the background">Repair Data</button>
         <button id="scanBtn" title="Run scanner without OpenAI">Run Scan</button>
         <button id="aiScanBtn" title="Run scan with AI summary">AI Scan</button>
@@ -373,6 +378,6 @@
       Educational scanner output only. This is not investment advice.
     </footer>
 
-    <script src="/static/app.js?v=20260515j"></script>
+    <script src="/static/app.js?v=20260515k"></script>
   </body>
 </html>

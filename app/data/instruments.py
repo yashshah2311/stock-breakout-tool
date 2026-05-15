@@ -232,7 +232,8 @@ SECTOR_BY_SYMBOL = {
 
 
 def sector_for_symbol(symbol: str) -> str:
-    return SECTOR_BY_SYMBOL.get(symbol.upper(), "Other")
+    clean = symbol.upper().removesuffix(".BO").removesuffix(".NS")
+    return SECTOR_BY_SYMBOL.get(clean, "Other")
 
 
 @dataclass(frozen=True)

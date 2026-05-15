@@ -16,6 +16,7 @@ const scanBtn = document.querySelector("#scanBtn");
 const aiScanBtn = document.querySelector("#aiScanBtn");
 const liveBtn = document.querySelector("#liveBtn");
 const autoLiveBtn = document.querySelector("#autoLiveBtn");
+const universeSelect = document.querySelector("#universeSelect");
 const repairBtn = document.querySelector("#repairBtn");
 const liveState = document.querySelector("#liveState");
 const liveRows = document.querySelector("#liveRows");
@@ -58,6 +59,7 @@ let selectedStrategyId = "all";
 let autoLiveTimer = null;
 let bootstrapTimer = null;
 let currentStatus = null;
+let universePayload = { nifty50: [], nifty100: [], bse_all: [] };
 let selectedSymbol = null;
 let activeChart = { candles: [], candidate: {}, start: 0, end: 0, dragging: false, dragX: 0 };
 
@@ -131,7 +133,9 @@ async function loadStatus() {
         : `Missing ${status.missing_zerodha_credentials.join(", ")}`;
   liveBtn.disabled = status.data_provider !== "yahoo" && !status.zerodha_configured;
   if (repairBtn) {
-    const needsRepair = status.app_env === "production" && Number(status.candle_stats.symbols || 0) < 90;
+    const targetCount = (universePayload[activeUniverse()] || []).length || 100;
+    const repairThreshold = activeUniverse() === "bse_all" ? Math.min(targetCount, 500) : 90;
+    const needsRepair = status.app_env === "production" && Number(status.candle_stats.symbols || 0) < repairThreshold;
     repairBtn.classList.toggle("attention", needsRepair);
     repairBtn.textContent = status.bootstrap?.running ? "Repairing" : needsRepair ? "Repair Data" : "Repair Data";
     repairBtn.disabled = Boolean(status.bootstrap?.running);
@@ -160,6 +164,14 @@ function renderSymbols() {
       `
     )
     .join("");
+}
+
+function activeUniverse() {
+  return universeSelect?.value || "nifty100";
+}
+
+function universeLabel() {
+  return activeUniverse() === "bse_all" ? "BSE All" : activeUniverse() === "nifty50" ? "Nifty 50" : "Nifty 100";
 }
 
 function setSectorOptions(candidates) {
@@ -249,7 +261,7 @@ function renderStrategyTabs() {
   if (!strategyTabs) {
     return;
   }
-  const tabs = [{ id: "all", number: 0, label: "All", status: "active", basis: "All scanned Nifty 100 stocks." }, ...strategyCatalog];
+  const tabs = [{ id: "all", number: 0, label: "All", status: "active", basis: `All scanned ${universeLabel()} stocks.` }, ...strategyCatalog];
   strategyTabs.innerHTML = tabs
     .map((strategy) => {
       const count = candidatesForStrategy(strategy.id).length;
@@ -294,8 +306,8 @@ function renderStrategyRows() {
 
   if (!rows.length) {
     strategyRows.innerHTML = hasScan
-      ? '<tr><td colspan="10" class="empty">No Nifty 100 stocks currently match this strategy.</td></tr>'
-      : '<tr><td colspan="10" class="empty">No scan data loaded yet. Click Run Scan to classify Nifty 100 stocks across strategy tabs.</td></tr>';
+      ? `<tr><td colspan="10" class="empty">No ${universeLabel()} stocks currently match this strategy.</td></tr>`
+      : `<tr><td colspan="10" class="empty">No scan data loaded yet. Click Run Scan to classify ${universeLabel()} stocks across strategy tabs.</td></tr>`;
     return;
   }
 
@@ -332,8 +344,9 @@ async function loadStrategies() {
 
 async function loadSymbols() {
   const [universe, stored] = await Promise.all([getJson("/universe/default"), getJson("/symbols")]);
+  universePayload = universe;
   const storedSet = new Set(stored.symbols || []);
-  const universeSymbols = universe.nifty100 || [];
+  const universeSymbols = universe[activeUniverse()] || universe.nifty100 || [];
   const merged = Array.from(new Set([...universeSymbols, ...(stored.symbols || [])])).sort();
   allSymbols = merged.map((symbol) => ({
     symbol,
@@ -454,8 +467,10 @@ async function runScan(useOpenAI = false) {
   button.disabled = true;
   button.textContent = "Updating";
   try {
+    const targetCount = (universePayload[activeUniverse()] || []).length || 100;
+    const repairThreshold = activeUniverse() === "bse_all" ? Math.min(targetCount, 500) : 90;
     const productionPartial =
-      currentStatus?.app_env === "production" && Number(currentStatus?.candle_stats?.symbols || 0) < 90;
+      currentStatus?.app_env === "production" && Number(currentStatus?.candle_stats?.symbols || 0) < repairThreshold;
     if (productionPartial) {
       reportBox.textContent =
         "Hosted candle history is partial. Starting background repair first; scan will use currently stored candles until repair completes.";
@@ -464,10 +479,10 @@ async function runScan(useOpenAI = false) {
     reportBox.textContent = useOpenAI
       ? "Fetching latest candles, scanning, then generating AI scenario notes..."
       : "Fetching latest Yahoo candles, then scanning...";
-    const fetchLatest = currentStatus?.app_env === "production" ? false : true;
+    const fetchLatest = currentStatus?.app_env === "production" || activeUniverse() === "bse_all" ? false : true;
     const result = await getJson("/scan", {
       method: "POST",
-      body: JSON.stringify({ universe: "nifty100", use_openai: useOpenAI, fetch_latest: fetchLatest, min_score: 0 }),
+      body: JSON.stringify({ universe: activeUniverse(), use_openai: useOpenAI, fetch_latest: fetchLatest, min_score: 0 }),
       timeoutMs: 180000,
     });
     latestCandidates = result.candidates || [];
@@ -508,7 +523,11 @@ async function startBootstrap() {
     repairBtn.disabled = true;
     repairBtn.textContent = "Repairing";
   }
-  const status = await getJson("/bootstrap/start", { method: "POST", body: JSON.stringify({}), timeoutMs: 30000 });
+  const payload = {
+    universe: activeUniverse(),
+    limit: activeUniverse() === "bse_all" ? 500 : null,
+  };
+  const status = await getJson("/bootstrap/start", { method: "POST", body: JSON.stringify(payload), timeoutMs: 30000 });
   liveState.textContent = status.message || "History repair queued";
   if (bootstrapTimer) {
     clearInterval(bootstrapTimer);
@@ -545,11 +564,13 @@ async function loadLivePrices() {
   liveBtn.disabled = true;
   liveBtn.textContent = "Loading";
   const startedAt = new Date();
-  liveState.textContent = "Requesting Nifty 100 delayed quotes";
+  const universeSymbols = universePayload[activeUniverse()] || [];
+  const symbols = activeUniverse() === "bse_all" ? universeSymbols.slice(0, 500) : universeSymbols;
+  liveState.textContent = `Requesting ${universeLabel()} delayed quotes${activeUniverse() === "bse_all" ? " (first 500)" : ""}`;
   try {
     const result = await getJson("/quotes/live", {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ symbols }),
       timeoutMs: 120000,
     });
     renderLiveQuotes(result.quotes || []);
@@ -1695,6 +1716,11 @@ scanBtn.addEventListener("click", () => runScan(false));
 aiScanBtn.addEventListener("click", () => runScan(true));
 liveBtn.addEventListener("click", loadLivePrices);
 autoLiveBtn.addEventListener("click", () => setAutoLive(!autoLiveTimer));
+universeSelect?.addEventListener("change", async () => {
+  await loadSymbols();
+  await loadLatest();
+  renderStrategyTabs();
+});
 repairBtn?.addEventListener("click", () => {
   startBootstrap().catch((error) => {
     liveState.textContent = `Repair failed to start - ${error.message}`;

@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Red
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.data.bse_universe import bse_equity_symbols
 from app.data.fundamentals import FundamentalsClient
 from app.data.historical_fetcher import fetch_and_store_history
 from app.data.instruments import DEFAULT_NIFTY50_SYMBOLS, DEFAULT_NIFTY100_SYMBOLS, sector_for_symbol
@@ -83,6 +84,11 @@ class BacktestRequest(BaseModel):
     max_symbols: int = Field(default=20, ge=1, le=100)
 
 
+class BootstrapStartRequest(BaseModel):
+    universe: str = "nifty100"
+    limit: int | None = Field(default=None, ge=1, le=6000)
+
+
 class PaperTradeCreateRequest(BaseModel):
     symbol: str
     side: str = "BUY"
@@ -112,6 +118,17 @@ def _candidate_for_symbol(symbol: str, latest_scan: dict | None) -> dict | None:
     return None
 
 
+def _symbols_for_universe(universe: str, limit: int | None = None) -> list[str]:
+    normalized = universe.strip().lower()
+    if normalized in {"bse", "bse_all", "all_bse"}:
+        symbols = bse_equity_symbols()
+    elif normalized == "nifty50":
+        symbols = DEFAULT_NIFTY50_SYMBOLS
+    else:
+        symbols = DEFAULT_NIFTY100_SYMBOLS
+    return symbols[:limit] if limit else symbols
+
+
 def _build_latest_from_stored_candles(settings) -> dict | None:
     candle_repo = CandleRepository(settings.database_url)
     stored_symbols = set(candle_repo.list_symbols())
@@ -123,7 +140,8 @@ def _build_latest_from_stored_candles(settings) -> dict | None:
         candle_repo=candle_repo,
         min_avg_traded_value=settings.min_avg_traded_value,
     )
-    scan_result = engine.scan(symbols=DEFAULT_NIFTY100_SYMBOLS, min_score=0)
+    scan_symbols = sorted(set(candle_repo.list_symbols()))
+    scan_result = engine.scan(symbols=scan_symbols, min_score=0)
     scan_result["llm_report"] = None
     scan_result["auto_built_from_stored_candles"] = True
     try:
@@ -138,24 +156,26 @@ def _build_latest_from_stored_candles(settings) -> dict | None:
     return scan_result
 
 
-def _bootstrap_history_job(years: int = 5, chunk_size: int = 5) -> None:
+def _bootstrap_history_job(universe: str = "nifty100", limit: int | None = None, years: int = 5, chunk_size: int = 5) -> None:
     settings = get_settings()
     candle_repo = CandleRepository(settings.database_url)
+    target_symbols = _symbols_for_universe(universe, limit)
     BOOTSTRAP_STATE.update(
         {
             "running": True,
             "started_at": datetime.utcnow().isoformat(),
             "finished_at": None,
             "phase": "fetching",
-            "message": "Fetching missing Nifty 100 candle history.",
+            "message": f"Fetching missing {universe.upper()} candle history.",
             "stored_candles": 0,
             "failed": [],
+            "total_symbols": len(target_symbols),
         }
     )
 
     try:
         stored_symbols = set(candle_repo.list_symbols())
-        missing = [symbol for symbol in DEFAULT_NIFTY100_SYMBOLS if symbol not in stored_symbols]
+        missing = [symbol for symbol in target_symbols if symbol not in stored_symbols]
         BOOTSTRAP_STATE["stored_symbols"] = len(stored_symbols)
         if not missing:
             BOOTSTRAP_STATE.update({"phase": "scanning", "message": "All symbols already have candle history. Rebuilding scan."})
@@ -179,7 +199,7 @@ def _bootstrap_history_job(years: int = 5, chunk_size: int = 5) -> None:
         BOOTSTRAP_STATE.update({"phase": "scanning", "message": "Rebuilding scanner results from stored candles."})
         scan_repo = ScanRepository(settings.database_url)
         engine = SignalEngine(candle_repo=candle_repo, min_avg_traded_value=settings.min_avg_traded_value)
-        scan_result = engine.scan(symbols=DEFAULT_NIFTY100_SYMBOLS, min_score=0)
+        scan_result = engine.scan(symbols=target_symbols, min_score=0)
         scan_repo.save_scan(
             scan_date=date.fromisoformat(scan_result["scan_date"]),
             candidates=scan_result["candidates"],
@@ -189,7 +209,7 @@ def _bootstrap_history_job(years: int = 5, chunk_size: int = 5) -> None:
         BOOTSTRAP_STATE.update(
             {
                 "phase": "complete",
-                "message": f"Bootstrap complete. Stored {BOOTSTRAP_STATE['stored_symbols']}/{len(DEFAULT_NIFTY100_SYMBOLS)} symbols and scanned {len(scan_result['candidates'])} candidates.",
+                "message": f"Bootstrap complete. Stored {BOOTSTRAP_STATE['stored_symbols']}/{len(target_symbols)} symbols and scanned {len(scan_result['candidates'])} candidates.",
             }
         )
     except Exception as exc:
@@ -245,11 +265,11 @@ def bootstrap_status() -> dict:
 
 
 @router.post("/bootstrap/start")
-def bootstrap_start(background_tasks: BackgroundTasks) -> dict:
+def bootstrap_start(payload: BootstrapStartRequest, background_tasks: BackgroundTasks) -> dict:
     if BOOTSTRAP_STATE["running"]:
         return BOOTSTRAP_STATE
     BOOTSTRAP_STATE.update({"phase": "queued", "message": "History bootstrap queued.", "running": True})
-    background_tasks.add_task(_bootstrap_history_job)
+    background_tasks.add_task(_bootstrap_history_job, payload.universe, payload.limit)
     return BOOTSTRAP_STATE
 
 
@@ -261,8 +281,20 @@ def symbols() -> dict[str, list[str]]:
 
 
 @router.get("/universe/default")
-def default_universe() -> dict[str, list[str]]:
-    return {"nifty50": DEFAULT_NIFTY50_SYMBOLS, "nifty100": DEFAULT_NIFTY100_SYMBOLS}
+def default_universe() -> dict:
+    bse_symbols: list[str] = []
+    bse_error = None
+    try:
+        bse_symbols = bse_equity_symbols()
+    except Exception as exc:
+        bse_error = str(exc)
+    return {
+        "nifty50": DEFAULT_NIFTY50_SYMBOLS,
+        "nifty100": DEFAULT_NIFTY100_SYMBOLS,
+        "bse_all": bse_symbols,
+        "bse_all_count": len(bse_symbols),
+        "bse_error": bse_error,
+    }
 
 
 @router.get("/sectors")
@@ -294,7 +326,7 @@ def strategies() -> dict:
 def strategy_backtest(payload: BacktestRequest) -> dict:
     settings = get_settings()
     candle_repo = CandleRepository(settings.database_url)
-    default_universe_symbols = DEFAULT_NIFTY100_SYMBOLS if payload.universe.lower() == "nifty100" else DEFAULT_NIFTY50_SYMBOLS
+    default_universe_symbols = _symbols_for_universe(payload.universe)
     symbols = payload.symbols or default_universe_symbols
     symbols = [symbol.strip().upper() for symbol in symbols if symbol.strip()][: payload.max_symbols]
     candles_by_symbol = {symbol: candle_repo.load_candles(symbol) for symbol in symbols}
@@ -578,7 +610,7 @@ def scan(payload: ScanRequest) -> dict:
     candle_repo = CandleRepository(settings.database_url)
     scan_repo = ScanRepository(settings.database_url)
 
-    default_universe_symbols = DEFAULT_NIFTY100_SYMBOLS if payload.universe.lower() == "nifty100" else DEFAULT_NIFTY50_SYMBOLS
+    default_universe_symbols = _symbols_for_universe(payload.universe)
     symbols = payload.symbols or default_universe_symbols
     if not symbols:
         raise HTTPException(
