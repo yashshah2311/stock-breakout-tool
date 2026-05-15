@@ -16,6 +16,7 @@ const scanBtn = document.querySelector("#scanBtn");
 const aiScanBtn = document.querySelector("#aiScanBtn");
 const liveBtn = document.querySelector("#liveBtn");
 const autoLiveBtn = document.querySelector("#autoLiveBtn");
+const repairBtn = document.querySelector("#repairBtn");
 const liveState = document.querySelector("#liveState");
 const liveRows = document.querySelector("#liveRows");
 const copyReportBtn = document.querySelector("#copyReportBtn");
@@ -55,6 +56,8 @@ let latestCandidates = [];
 let strategyCatalog = [];
 let selectedStrategyId = "all";
 let autoLiveTimer = null;
+let bootstrapTimer = null;
+let currentStatus = null;
 let selectedSymbol = null;
 let activeChart = { candles: [], candidate: {}, start: 0, end: 0, dragging: false, dragX: 0 };
 
@@ -113,6 +116,7 @@ async function getJson(url, options = {}) {
 
 async function loadStatus() {
   const status = await getJson("/status");
+  currentStatus = status;
   symbolCount.textContent = formatNumber(status.candle_stats.symbols);
   candleCount.textContent = formatNumber(status.candle_stats.candles);
   latestCandle.textContent = status.candle_stats.latest_candle_date || "-";
@@ -126,6 +130,15 @@ async function loadStatus() {
         ? "Ready for Zerodha LTP"
         : `Missing ${status.missing_zerodha_credentials.join(", ")}`;
   liveBtn.disabled = status.data_provider !== "yahoo" && !status.zerodha_configured;
+  if (repairBtn) {
+    const needsRepair = status.app_env === "production" && Number(status.candle_stats.symbols || 0) < 90;
+    repairBtn.classList.toggle("attention", needsRepair);
+    repairBtn.textContent = status.bootstrap?.running ? "Repairing" : needsRepair ? "Repair Data" : "Repair Data";
+    repairBtn.disabled = Boolean(status.bootstrap?.running);
+    if (needsRepair && !status.bootstrap?.running) {
+      liveState.textContent = `${liveState.textContent} - hosted history is partial; click Repair Data`;
+    }
+  }
 }
 
 function renderSymbols() {
@@ -441,12 +454,21 @@ async function runScan(useOpenAI = false) {
   button.disabled = true;
   button.textContent = "Updating";
   try {
+    const productionPartial =
+      currentStatus?.app_env === "production" && Number(currentStatus?.candle_stats?.symbols || 0) < 90;
+    if (productionPartial) {
+      reportBox.textContent =
+        "Hosted candle history is partial. Starting background repair first; scan will use currently stored candles until repair completes.";
+      await startBootstrap();
+    }
     reportBox.textContent = useOpenAI
       ? "Fetching latest candles, scanning, then generating AI scenario notes..."
       : "Fetching latest Yahoo candles, then scanning...";
+    const fetchLatest = currentStatus?.app_env === "production" ? false : true;
     const result = await getJson("/scan", {
       method: "POST",
-      body: JSON.stringify({ universe: "nifty100", use_openai: useOpenAI, fetch_latest: true, min_score: 0 }),
+      body: JSON.stringify({ universe: "nifty100", use_openai: useOpenAI, fetch_latest: fetchLatest, min_score: 0 }),
+      timeoutMs: 180000,
     });
     latestCandidates = result.candidates || [];
     setSectorOptions(latestCandidates);
@@ -462,6 +484,41 @@ async function runScan(useOpenAI = false) {
     button.disabled = false;
     button.textContent = useOpenAI ? "AI Scan" : "Run Scan";
   }
+}
+
+async function loadBootstrapStatus() {
+  const status = await getJson("/bootstrap/status", { timeoutMs: 30000 });
+  const progress = `${status.stored_symbols || 0}/${status.total_symbols || 100} symbols`;
+  liveState.textContent = `${status.message || "Repair status"} - ${progress}`;
+  if (repairBtn) {
+    repairBtn.disabled = Boolean(status.running);
+    repairBtn.textContent = status.running ? "Repairing" : "Repair Data";
+  }
+  if (!status.running && bootstrapTimer) {
+    clearInterval(bootstrapTimer);
+    bootstrapTimer = null;
+    await loadStatus();
+    await loadLatest();
+  }
+  return status;
+}
+
+async function startBootstrap() {
+  if (repairBtn) {
+    repairBtn.disabled = true;
+    repairBtn.textContent = "Repairing";
+  }
+  const status = await getJson("/bootstrap/start", { method: "POST", body: JSON.stringify({}), timeoutMs: 30000 });
+  liveState.textContent = status.message || "History repair queued";
+  if (bootstrapTimer) {
+    clearInterval(bootstrapTimer);
+  }
+  bootstrapTimer = setInterval(() => {
+    loadBootstrapStatus().catch((error) => {
+      liveState.textContent = `Repair status failed - ${error.message}`;
+    });
+  }, 10000);
+  return status;
 }
 
 function renderLiveQuotes(quotes) {
@@ -1638,6 +1695,15 @@ scanBtn.addEventListener("click", () => runScan(false));
 aiScanBtn.addEventListener("click", () => runScan(true));
 liveBtn.addEventListener("click", loadLivePrices);
 autoLiveBtn.addEventListener("click", () => setAutoLive(!autoLiveTimer));
+repairBtn?.addEventListener("click", () => {
+  startBootstrap().catch((error) => {
+    liveState.textContent = `Repair failed to start - ${error.message}`;
+    if (repairBtn) {
+      repairBtn.disabled = false;
+      repairBtn.textContent = "Repair Data";
+    }
+  });
+});
 refreshChartBtn.addEventListener("click", () => {
   if (selectedSymbol) {
     openStockChart(selectedSymbol);

@@ -94,6 +94,18 @@ button.active {
   color: var(--accent-strong);
 }
 
+button.attention {
+  border-color: #d97706;
+  background: #fff7ed;
+  color: #92400e;
+}
+
+.topbar button.attention {
+  border-color: #f59e0b;
+  background: #f59e0b;
+  color: #111827;
+}
+
 button:disabled,
 input:disabled {
   cursor: not-allowed;

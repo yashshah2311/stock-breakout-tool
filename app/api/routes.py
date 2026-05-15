@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,18 @@ from app.scanner.signal_engine import SignalEngine
 from app.scanner.strategy_engine import strategy_catalog
 
 router = APIRouter()
+
+BOOTSTRAP_STATE = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "phase": "idle",
+    "message": "Bootstrap has not run.",
+    "stored_symbols": 0,
+    "total_symbols": len(DEFAULT_NIFTY100_SYMBOLS),
+    "stored_candles": 0,
+    "failed": [],
+}
 
 
 def _usable_openai_key(key: str | None) -> bool:
@@ -126,6 +138,66 @@ def _build_latest_from_stored_candles(settings) -> dict | None:
     return scan_result
 
 
+def _bootstrap_history_job(years: int = 5, chunk_size: int = 5) -> None:
+    settings = get_settings()
+    candle_repo = CandleRepository(settings.database_url)
+    BOOTSTRAP_STATE.update(
+        {
+            "running": True,
+            "started_at": datetime.utcnow().isoformat(),
+            "finished_at": None,
+            "phase": "fetching",
+            "message": "Fetching missing Nifty 100 candle history.",
+            "stored_candles": 0,
+            "failed": [],
+        }
+    )
+
+    try:
+        stored_symbols = set(candle_repo.list_symbols())
+        missing = [symbol for symbol in DEFAULT_NIFTY100_SYMBOLS if symbol not in stored_symbols]
+        BOOTSTRAP_STATE["stored_symbols"] = len(stored_symbols)
+        if not missing:
+            BOOTSTRAP_STATE.update({"phase": "scanning", "message": "All symbols already have candle history. Rebuilding scan."})
+
+        for index in range(0, len(missing), chunk_size):
+            chunk = missing[index : index + chunk_size]
+            BOOTSTRAP_STATE.update(
+                {
+                    "phase": "fetching",
+                    "message": f"Fetching symbols {index + 1}-{index + len(chunk)} of {len(missing)} missing.",
+                }
+            )
+            try:
+                result = fetch_and_store_history(symbols=chunk, years=years, settings=settings)
+                BOOTSTRAP_STATE["stored_candles"] += int(result.get("stored_candles") or 0)
+                BOOTSTRAP_STATE["failed"].extend(result.get("failed") or [])
+            except Exception as exc:
+                BOOTSTRAP_STATE["failed"].append({"symbols": chunk, "reason": str(exc)})
+            BOOTSTRAP_STATE["stored_symbols"] = len(candle_repo.list_symbols())
+
+        BOOTSTRAP_STATE.update({"phase": "scanning", "message": "Rebuilding scanner results from stored candles."})
+        scan_repo = ScanRepository(settings.database_url)
+        engine = SignalEngine(candle_repo=candle_repo, min_avg_traded_value=settings.min_avg_traded_value)
+        scan_result = engine.scan(symbols=DEFAULT_NIFTY100_SYMBOLS, min_score=0)
+        scan_repo.save_scan(
+            scan_date=date.fromisoformat(scan_result["scan_date"]),
+            candidates=scan_result["candidates"],
+            llm_report=None,
+            market_context=scan_result.get("market_context"),
+        )
+        BOOTSTRAP_STATE.update(
+            {
+                "phase": "complete",
+                "message": f"Bootstrap complete. Stored {BOOTSTRAP_STATE['stored_symbols']}/{len(DEFAULT_NIFTY100_SYMBOLS)} symbols and scanned {len(scan_result['candidates'])} candidates.",
+            }
+        )
+    except Exception as exc:
+        BOOTSTRAP_STATE.update({"phase": "failed", "message": str(exc)})
+    finally:
+        BOOTSTRAP_STATE.update({"running": False, "finished_at": datetime.utcnow().isoformat()})
+
+
 @router.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
     settings = get_settings()
@@ -163,7 +235,22 @@ def status() -> dict:
         "paper_trades_count": len(paper_repo.list_trades()),
         "candle_stats": candle_stats,
         "available_symbols": candle_repo.list_symbols(),
+        "bootstrap": BOOTSTRAP_STATE,
     }
+
+
+@router.get("/bootstrap/status")
+def bootstrap_status() -> dict:
+    return BOOTSTRAP_STATE
+
+
+@router.post("/bootstrap/start")
+def bootstrap_start(background_tasks: BackgroundTasks) -> dict:
+    if BOOTSTRAP_STATE["running"]:
+        return BOOTSTRAP_STATE
+    BOOTSTRAP_STATE.update({"phase": "queued", "message": "History bootstrap queued.", "running": True})
+    background_tasks.add_task(_bootstrap_history_job)
+    return BOOTSTRAP_STATE
 
 
 @router.get("/symbols")
